@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import argparse
+import re
+from sys import exit, stderr
+import os.path
+import gzip
+from signal import signal, SIGPIPE, SIG_DFL
+
+# Handle broken pipes:
+signal(SIGPIPE, SIG_DFL) 
+
+version = '1.1 (2017-03-16)'
+
+parser = argparse.ArgumentParser(description='Summarize Illumina FASTQ read header metadata based on the first read header')
+parser.add_argument('-v', '--version', action='version', version='%(prog)s {0}'.format(version))
+parser.add_argument('-n', '--no-header', dest='header', action='store_false', default=True, help='suppress column headers')
+parser.add_argument('-s', '--suppress-mismatch', dest='show_mismatch', action='store_false', default=True, help='suppress data for mismatching files')
+parser.add_argument('-f', '--format', dest='format', choices=['none', 'cassava18', 'cassava18full'], default='cassava18', help='the FASTQ header format')
+parser.add_argument('-c', '--csv', dest='csv', action='store_true', default=False, help='output data as CSV (ignores -n)')
+parser.add_argument(dest='filenames', metavar='<filename>', nargs='+', help='FASTQ file(s) to process')
+args = parser.parse_args()
+
+def error(message, exit_code=1):
+    print('ERROR: {}'.format(message), file=stderr)
+    exit(exit_code)
+
+def formatLine(x, csv=args.csv):
+    if csv is True:
+        sep = ','
+        x = ['"{}"'.format(i) for i in x]
+    else: sep = '\t'
+    return sep.join(x)
+
+# Define the header types and columns:
+header_data = {
+    'none': {
+        're': re.compile('@(?P<header>.*)'),
+        'cols': ('header',)
+    },
+    'cassava18': {
+        're': re.compile('@(?P<serial>.+):(?P<run>\d+):(?P<flowcell>.+):(?P<lane>\d+):\d+:\d+:\d+\s+(?P<pair>\d+):(?P<filter>[YN]):(?P<flags>\d+):(?P<index>.*)'),
+        'cols': ('serial', 'run', 'flowcell', 'lane', 'pair', 'filter', 'flags', 'index',)
+    },
+    'cassava18full': {
+        're': re.compile('@(?P<serial>.+):(?P<run>\d+):(?P<flowcell>.+):(?P<lane>\d+):(?P<tile>\d+):(?P<tile_x>\d+):(?P<tile_y>\d+)\s+(?P<pair>\d+):(?P<filter>[YN]):(?P<flags>\d+):(?P<index>.*)'),
+        'cols': ('serial', 'run', 'flowcell', 'lane', 'tile', 'tile_x', 'tile_y', 'pair', 'filter', 'flags', 'index',)
+    }
+}
+
+# Print out a header line if necessary:
+if args.header is True:
+    cols = ['filename']
+    cols.extend(header_data[args.format]['cols'])
+    print(formatLine(cols))
+
+# Run through each file in turn:
+for filename in args.filenames:
+    try:
+        f = gzip.open(filename, 'r')
+        header_line = f.readline().decode('ASCII').strip()
+    except OSError:
+        try:
+            f = open(filename, 'rt')
+            header_line = f.readline().strip()
+        except: error('failed to open file "{}"'.format(filename))
+    match = header_data[args.format]['re'].match(header_line)
+    output = [filename, ]
+    if match is not None:
+        for i in header_data[args.format]['cols']: output.append(match.group(i))
+    elif args.show_mismatch is True:
+        for i in header_data[args.format]['cols']: output.append('?')
+    else: continue
+    print(formatLine(output))
